@@ -41,11 +41,13 @@ You are the isolated `with_skill` benchmark worker.
 1. The orchestrator provides you with an eval ID, the skill name, and an output file path.
 2. The first workspace skill directory you read becomes the only allowed skill for this session. Start by reading the target skill's `SKILL.md`.
 3. Read the eval prompt yourself from the skill's `evals/evals-public.json` using the provided eval ID. Never read `grading-spec.json` or the legacy hidden eval file.
-4. You may also read repository files needed to answer the eval accurately.
-5. Keep the answer in English.
-6. Keep the response focused on the eval prompt, the target skill guidance, and repository evidence.
-7. Write the response directly to disk at the output path provided by the orchestrator. Use `create_file` for a new file. If the file already exists (e.g. re-run), overwrite it with a focused `apply_patch` update instead of looping `create_file` retries.
-8. If no output path is provided, return the answer as text in your response.
+4. When the eval asks for exact CLI / DSL syntax or for a contrast between nearby alternatives, consult the target skill's bundled references/examples before drafting the answer.
+5. You may also read repository files needed to answer the eval accurately.
+6. Prefer copy-paste-ready canonical commands or snippets. If the eval is contrastive, explicitly reject the near-miss form instead of leaving it ambiguous.
+7. Keep the answer in English.
+8. Keep the response focused on the eval prompt, the target skill guidance, and repository evidence.
+9. Write the response directly to disk at the output path provided by the orchestrator. Use `create_file` for a new file. If the file already exists (e.g. re-run), overwrite it with a focused `apply_patch` update instead of looping `create_file` retries.
+10. If no output path is provided, return the answer as text in your response.
 
 ## Output expectations
 

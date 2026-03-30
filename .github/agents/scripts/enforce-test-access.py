@@ -92,6 +92,9 @@ WORKER_WRITE_DENY_PREFIXES = (
     "test/_agent-hooks/",
     "test/_meta/",
 )
+BLIND_COMPARE_RAW_JOURNAL_RE = re.compile(
+    r"^test/(?P<iteration>(?:iteration-\d+|.+-test\d+))/_meta/raw-comparison-[^/]+\.json$"
+)
 ALLOWED_MANAGER_COMMANDS = (
     re.compile(r"^(python|python3|py(?:\s+-3)?)\s+test/scripts/skill_suite_tools\.py\b"),
     re.compile(r"^(python|python3|py(?:\s+-3)?)\s+\.github/agents/scripts/enforce-test-access\.py\b"),
@@ -243,7 +246,8 @@ def session_start_output(mode: str) -> dict[str, Any]:
         "blind_compare": (
             "Blind comparator mode is active. Stay blind to mapping and raw non-blind outputs; "
             "read only blind A/B artifacts from the active iteration plus the target grading-spec.json. "
-            "MCP tools remain blocked in this mode."
+            "When the orchestrator provides an explicit raw_output_path, you may journal the raw comparator "
+            "payload only under test/<iteration>/_meta/raw-comparison-*.json. MCP tools remain blocked in this mode."
         ),
     }
     additional = messages.get(mode)
@@ -489,6 +493,30 @@ def handle_edit(
     mode: str,
     state: dict[str, Any],
 ) -> dict[str, Any]:
+    if mode == "blind_compare":
+        paths = extract_paths(tool_name, tool_input, workspace_root)
+        if not paths:
+            return deny("Could not determine which files would be edited; blind comparator writes must be explicitly path-scoped.")
+
+        for rel_path in paths:
+            if not is_blind_compare_write_allowed(rel_path):
+                return deny(
+                    f"Editing '{rel_path}' is outside the blind comparator write scope. Blind comparator workers may only write raw-comparison journal files under test/<iteration>/_meta/."
+                )
+
+        iteration_scope_failure = enforce_iteration_scope(
+            state,
+            workspace_root,
+            extract_iteration_candidates_from_paths(paths),
+            mode,
+        )
+        if iteration_scope_failure:
+            return deny(iteration_scope_failure)
+
+        return allow(
+            additional_context="Blind comparator write allowed only for raw-comparison journal files under test/<iteration>/_meta/."
+        )
+
     if mode not in {"benchmark_manager"} and mode not in WORKER_WRITE_MODES:
         return deny("Editing tools are disabled for benchmark worker agents.")
 
@@ -611,6 +639,15 @@ def is_worker_write_allowed(rel_path: str) -> bool:
     if len(parts) >= 3 and parts[2].startswith("_"):
         return False
     return True
+
+
+def is_blind_compare_write_allowed(rel_path: str) -> bool:
+    normalized = normalize_rel_path(rel_path)
+    match = BLIND_COMPARE_RAW_JOURNAL_RE.match(normalized)
+    if not match:
+        return False
+    iteration_name = match.group("iteration")
+    return is_benchmark_iteration_dir(iteration_name)
 
 
 def configured_allowed_iteration() -> str | None:
