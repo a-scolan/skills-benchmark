@@ -1,0 +1,4 @@
+# Minimal runtime dependency set for this repository.
+# Most benchmark harness modules use Python's standard library only.
+# PyYAML is required by skill-creator utility scripts (e.g. quick_validate.py).
+PyYAML>=6.0

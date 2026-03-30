@@ -85,7 +85,30 @@ The framework deploys **4 specialized worker agents** (plus 1 orchestrator):
 - VS Code with GitHub Copilot enabled
 - Workspace with `.github/skills/` directory containing skills to benchmark
 
+### Install and Verify
+
+For a reproducible local setup, follow [`docs/SETUP.md`](docs/SETUP.md).
+
+Fast path:
+
+- Create and activate a virtual environment
+- Install dependencies from `requirements.txt`
+- Run a harness smoke-check (`self-test`) on a dedicated iteration folder
+
+If the smoke-check succeeds, your workspace is ready for either manager-driven runs (in Copilot chat) or CLI runs.
+
 ### Running a Benchmark
+
+#### Minimal First Run (CLI, end-to-end)
+
+Use this sequence when reusing the repository in a fresh workspace:
+
+1. Create an iteration folder, for example: `test/benchmark-run-001/`
+2. Generate protocol lock and preflight checks
+3. Execute the benchmark workflow
+4. Finalize and aggregate outputs
+
+Example commands are documented in [`docs/SETUP.md`](docs/SETUP.md#minimal-first-run-cli).
 
 #### Method 1: Via GitHub Copilot Agent (Recommended)
 
@@ -121,6 +144,8 @@ python test/scripts/skill_suite_tools.py prune-generated-artifacts \
   --iteration test/benchmark-run-001 \
   --workspace-root .
 ```
+
+For a fully guided first run (including protocol and preflight steps), see [`docs/SETUP.md`](docs/SETUP.md).
 
 ### Understanding Outputs
 
@@ -160,8 +185,7 @@ test/benchmark-run-001/
 │   ├── skill-benchmark-baseline-hook-only.agent.md
 │   ├── skill-benchmark-with-skill.agent.md
 │   └── skill-blind-comparator.agent.md
-├── skills/                          # Workspace skills under test (templated)
-└── copilot-instructions.md          # Workspace agent configuration
+└── skills/                          # Workspace skills under test (templated)
 
 test/
 ├── benchmark-agent-workflow.md      # Full workflow specification & invariants
@@ -176,6 +200,8 @@ test/
 LICENSE                             # MIT
 README.md                            # This file
 ```
+
+Note: there is no mandatory root `.github/copilot-instructions.md` file for this repository workflow.
 
 ## Key Concepts
 
@@ -346,6 +372,8 @@ python test/scripts/tests/test_skill_suite_tools.py
 
 - [Full Workflow Specification](test/benchmark-agent-workflow.md) – detailed phase descriptions, trust rules, output contracts
 - [Benchmark Protocol](test/benchmark-protocol.json) – current protocol version and artifact schemas
+- [Setup and Reuse Guide](docs/SETUP.md) – reproducible environment setup and first benchmark run
+- [Troubleshooting Guide](docs/TROUBLESHOOTING.md) – common failures and targeted fixes
 - `.github/agents/*.agent.md` – individual agent operating rules and constraints
 
 ## Contributing
