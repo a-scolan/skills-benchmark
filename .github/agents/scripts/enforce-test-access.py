@@ -63,8 +63,12 @@ FORBIDDEN_NON_WORKER_PREFIXES = (
     ".github/instructions/",
     ".github/hooks/",
 )
-ROOT_READ_ALLOWLIST = (
-    "projects/shared/",
+ROOT_READ_ALLOWLIST: tuple[str, ...] = ()
+BASELINE_PROMPT_INPUT_READ_RE = re.compile(
+    r"^test/(?P<iteration>(?:iteration-\d+|.+-test\d+))/(?P<skill>[^/_][^/]*)/eval-\d+/input/(?:prompt\.md|prompt\.json)$"
+)
+WITH_SKILL_PROMPT_INPUT_READ_RE = re.compile(
+    r"^test/(?P<iteration>(?:iteration-\d+|.+-test\d+))/(?P<skill>[^/_][^/]*)/eval-\d+/input/(?:prompt\.md|prompt\.json)$"
 )
 MANAGER_READ_ALLOWLIST = (
     "README.md",
@@ -125,12 +129,18 @@ ITERATION_REQUIRED_MANAGER_SUBCOMMANDS = {
     "materialize-comparisons-stdin",
     "resume-finalize",
     "write-run-metrics",
+    "write-run-metrics-auto",
     "summarize-phase",
     "summarize-config",
     "prepare-blind",
     "protocol-preflight",
     "synthesis-bundle",
     "write-synthesis",
+}
+MANAGER_SUBCOMMAND_REQUIRED_FLAGS: dict[str, tuple[str, ...]] = {
+    "summarize-config": ("--config",),
+    "summarize-phase": ("--config",),
+    "write-run-metrics": ("--started-at", "--finished-at", "--files-read-count", "--files-written-count"),
 }
 STATE_FILENAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
@@ -221,15 +231,15 @@ def session_start_output(mode: str) -> dict[str, Any]:
             "Strict baseline benchmark worker mode is active. Workspace skills must have been "
             "relocated out of .github/skills/ before the session started, and no SKILL.md file "
             "may be read in this session. Outside the target prompt and benchmark artefacts, "
-            "only shared specification examples under projects/shared/ may be read. LikeC4 MCP use "
+            "no project folders may be read. LikeC4 MCP use "
             "must stay limited to narrow element/relationship grounding; project listing, project "
             "summaries, and view browsing remain blocked. Other MCP servers remain blocked."
         ),
         "baseline_hook_only": (
             "Hook-only baseline probe mode is active. Workspace skills may remain in place, "
             "but no .github path or SKILL.md file may be read in this session. Outside the "
-            "target prompt and benchmark artefacts, only shared specification examples under "
-            "projects/shared/ may be read. LikeC4 MCP use must stay limited to narrow "
+            "target prompt and benchmark artefacts, no project folders may be read. "
+            "LikeC4 MCP use must stay limited to narrow "
             "element/relationship grounding; project listing, project summaries, and view browsing "
             "remain blocked. All other MCP servers remain blocked. Treat this as an experiment, not "
             "the default trust boundary."
@@ -237,7 +247,7 @@ def session_start_output(mode: str) -> dict[str, Any]:
         "with_skill_targeted": (
             "Targeted with-skill worker mode is active. The first skill directory you read "
             "becomes the only workspace skill allowed for the rest of the session. Outside that "
-            "skill, only shared specification examples under projects/shared/ may be read. "
+            "skill, no project folders may be read. "
             "Within the target skill, read eval prompts only from evals/evals-public.json; "
             "grading-spec.json stays hidden from workers. LikeC4 MCP use must stay limited to narrow "
             "element/relationship grounding; project listing, project summaries, and view browsing "
@@ -418,10 +428,16 @@ def handle_execute(tool_input: Any, workspace_root: Path, mode: str, state: dict
 
     for command in commands:
         normalized = " ".join(command.strip().split())
-        if not any(pattern.search(normalized) for pattern in ALLOWED_MANAGER_COMMANDS):
+        normalized_candidates = normalize_manager_command_candidates(normalized)
+        if not normalized_candidates:
             return deny(
                 f"Command '{normalized}' is outside the benchmark-manager allowlist. Use test/scripts helpers, pytest under test/scripts, or harmless git inspection only."
             )
+        for candidate in normalized_candidates:
+            if not any(pattern.search(candidate) for pattern in ALLOWED_MANAGER_COMMANDS):
+                return deny(
+                    f"Command '{candidate}' is outside the benchmark-manager allowlist. Use test/scripts helpers, pytest under test/scripts, or harmless git inspection only."
+                )
 
     iteration_candidates = extract_iteration_candidates_from_commands(commands, workspace_root)
     for command in commands:
@@ -431,6 +447,14 @@ def handle_execute(tool_input: Any, workspace_root: Path, mode: str, state: dict
                 f"Command '{subcommand}' must provide an explicit --iteration test/<iteration> argument. "
                 "Implicit/default iteration resolution is denied to avoid writing benchmark artifacts to the wrong folder."
             )
+        required_flags = MANAGER_SUBCOMMAND_REQUIRED_FLAGS.get(subcommand or "")
+        if required_flags:
+            missing = [flag for flag in required_flags if not has_command_flag(command, flag)]
+            if missing:
+                return deny(
+                    f"Command '{subcommand}' is missing required flag(s): {', '.join(missing)}. "
+                    "Provide explicit arguments to keep benchmark runs deterministic and resumable."
+                )
 
     iteration_scope_failure = enforce_iteration_scope(state, workspace_root, iteration_candidates, mode)
     if iteration_scope_failure:
@@ -454,6 +478,41 @@ def extract_commands(tool_input: Any) -> list[str]:
         for item in tool_input:
             commands.extend(extract_commands(item))
     return commands
+
+
+def normalize_manager_command_candidates(command: str) -> list[str]:
+    stripped = command.strip()
+    if not stripped:
+        return []
+
+    # Keep manager execution deterministic and avoid shell escape patterns.
+    if any(token in stripped for token in ("|", ">", "<", "$(", "`") ):
+        return []
+
+    if re.match(r"^for\b", stripped):
+        loop_match = re.search(r"\bdo\b(?P<body>.*)\bdone\b", stripped)
+        if not loop_match:
+            return []
+        body = loop_match.group("body")
+        return [segment for segment in split_manager_command_segments(body) if segment]
+
+    return [segment for segment in split_manager_command_segments(stripped) if segment]
+
+
+def split_manager_command_segments(command: str) -> list[str]:
+    segments = [segment.strip() for segment in re.split(r"&&|;|\n", command) if segment.strip()]
+    filtered: list[str] = []
+    for segment in segments:
+        lowered = segment.lower()
+        if lowered in {"do", "done", "then", "fi"}:
+            continue
+        filtered.append(" ".join(segment.split()))
+    return filtered
+
+
+def has_command_flag(command: str, flag: str) -> bool:
+    escaped = re.escape(flag)
+    return bool(re.search(rf"(?:^|\s){escaped}(?:\s+[^\s]+|=[^\s]+)?(?:\s|$)", command))
 
 
 def extract_skill_suite_subcommand(command: str) -> str | None:
@@ -578,7 +637,10 @@ def handle_search(
     for pattern in include_patterns:
         prefix = normalize_glob_prefix(pattern)
         if prefix is None:
-            return deny(f"Search scope '{pattern}' is too broad. Scope searches to a concrete allowed subtree such as test/**, .github/agents/**, or projects/shared/** depending on mode.")
+            return deny(
+                f"Search scope '{pattern}' is too broad. Scope searches to a concrete allowed subtree "
+                "that is explicitly permitted for the current benchmark mode."
+            )
         if not is_read_allowed(prefix, mode, state, workspace_root, is_prefix=True):
             return deny(f"Search scope '{pattern}' is outside the allowed benchmark area for mode '{mode}'.")
     return allow()
@@ -746,9 +808,13 @@ def is_read_allowed(
     if mode in {"baseline", "baseline_hook_only"}:
         if rel_path.startswith(".github/"):
             return False
+        if is_baseline_prompt_input_read_allowed(rel_path, state, workspace_root):
+            return True
         return any(path_matches_allowlist(rel_path, allowed, is_prefix=is_prefix) for allowed in ROOT_READ_ALLOWLIST)
 
     if mode == "with_skill_targeted":
+        if is_with_skill_prompt_input_read_allowed(rel_path, state, workspace_root):
+            return True
         if rel_path.startswith(".github/skills/"):
             skill_name = extract_skill_from_skills_path(rel_path)
             if not skill_name:
@@ -805,6 +871,27 @@ def is_read_allowed(
         return False
 
     return False
+
+
+def is_baseline_prompt_input_read_allowed(rel_path: str, state: dict[str, Any], workspace_root: Path) -> bool:
+    match = BASELINE_PROMPT_INPUT_READ_RE.match(rel_path)
+    if not match:
+        return False
+    iteration_name = match.group("iteration")
+    return lock_iteration(state, iteration_name, workspace_root)
+
+
+def is_with_skill_prompt_input_read_allowed(rel_path: str, state: dict[str, Any], workspace_root: Path) -> bool:
+    match = WITH_SKILL_PROMPT_INPUT_READ_RE.match(rel_path)
+    if not match:
+        return False
+    iteration_name = match.group("iteration")
+    skill_name = match.group("skill")
+    if not lock_iteration(state, iteration_name, workspace_root):
+        return False
+    if not lock_skill(state, skill_name, workspace_root):
+        return False
+    return state.get("locked_skill") == skill_name
 
 
 def path_matches_allowlist(rel_path: str, allowed: str, *, is_prefix: bool) -> bool:

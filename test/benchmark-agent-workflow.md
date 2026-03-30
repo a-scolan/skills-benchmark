@@ -23,6 +23,8 @@ Internal helpers now live under `test/scripts/benchmark/`. This refactor must re
 - Default work unit: `<skill, eval_id, configuration, run_number>`
 - `with_skill` starts only after skill restoration
 - blind comparison starts only after `with_skill` completes
+- `protocol-preflight` auto-resets hook state for all worker modes (`baseline`, `with_skill_targeted`, `blind_compare`) at iteration start — this is the mandatory safeguard against cross-iteration session contamination (anonymous session IDs are stable-prefix-derived and persist across runs)
+- `disable-workspace-skills` is idempotent: if skills are already relocated and the manifest exists, a second call returns the existing manifest instead of raising an error
 - `materialize-comparisons` must refresh `suite-summary.json` and `suite-summary.md` immediately
 - `materialize-comparisons` must merge incrementally by `(eval_id, run_number)` (never overwrite previous comparisons) and refresh `suite-summary.json` + `suite-summary.md` immediately
 - `materialize-comparisons-stdin` without `--raw-json` must persist each payload to a unique `_meta/raw-comparison-*.json` journal file (no shared overwrite target)
@@ -34,8 +36,14 @@ Internal helpers now live under `test/scripts/benchmark/`. This refactor must re
 - Blind artifacts are run-scoped only: `.../blind/run-<N>/A.md|B.md` plus `blind-map.run-<N>.json` beside the eval directory. Legacy flat `blind/A.md`, `blind/B.md`, and `blind-map.json` are no longer generated.
 - Hook path enforcement must derive access scope only from explicit path-bearing tool fields (for example `filePath`, `path`, `includePattern`, `uri`) and must not infer file access from free-text prompt/editor context.
 - `snapshot-public-evals` now materializes worker-local public prompt inputs at `test/<iteration>/<skill>/eval-<id>/input/prompt.md` and `prompt.json`; baseline workers may read only these prompt files (plus their own benchmark artefacts), not project folders.
+- `snapshot-public-evals` is relocation-aware: if `.github/skills/` is temporarily empty during strict baseline, it falls back to `test/<iteration>/_disabled-skills/` so prompt snapshots can still be generated without a manual restore/disable bounce.
+- `with_skill_targeted` workers may read the same iteration-local prompt input files (`test/<iteration>/<skill>/eval-<id>/input/prompt.md|prompt.json`) in addition to `evals/evals-public.json`, while `grading-spec.json` remains hidden.
+- Benchmark-manager command guardrails now fail fast for missing required subcommand flags (for example `summarize-config` without `--config`) to prevent partial/manual reruns.
+- Benchmark-manager command parsing now accepts safe `for ... do ... done` batching only when every command inside the loop body is still on the allowlist.
 
 If raw hook payloads omit `sessionId`, the wrapper must derive stable anonymous sessions per scope for stateful phases. If that derivation is ambiguous, reset hook state and serialize that phase as a safety fallback.
+
+**Cross-iteration contamination rule:** Anonymous session IDs are derived from a stable prefix (e.g. `anonymous-with_skill_targeted-likec4-dsl`). A session locked to iteration N will deny writes to iteration N+1. `protocol-preflight` now resets all worker modes automatically. Never skip it when starting a new iteration, even for a re-run.
 
 ## Eval and grading calibration
 
@@ -51,14 +59,14 @@ If raw hook payloads omit `sessionId`, the wrapper must derive stable anonymous 
 
 1. `clean-benchmark-artifacts` (skips git-tracked iteration directories)
 2. `write-protocol-manifest`
-3. `protocol-preflight`
+3. `protocol-preflight` — **automatically resets hook state for `baseline`, `with_skill_targeted`, and `blind_compare` modes** (prevents cross-iteration scope contamination from previous iteration sessions)
 4. relocate skills
 5. run all `without_skill` workers in parallel waves
-6. `write-run-metrics` for each `<config, run_number>` to the **per-run path** `_runs/<config>/run-<N>-metrics.json` (never directly to `<config>-run-metrics.json`)
+6. `write-run-metrics` (or `write-run-metrics-auto`) for each `<config, run_number>` to the **per-run path** `_runs/<config>/run-<N>-metrics.json` (never directly to `<config>-run-metrics.json`)
 7. normalize + validate metrics
 8. restore skills
 9. run all `with_skill` workers in parallel waves
-10. `write-run-metrics` for each `<config, run_number>` to the same per-run path pattern
+10. `write-run-metrics` (or `write-run-metrics-auto`) for each `<config, run_number>` to the same per-run path pattern
 11. normalize + validate metrics
 12. `reset-blind-comparisons` for each skill (required before `prepare-blind` on a re-run or fresh run)
 13. run blind comparison in parallel waves
@@ -88,7 +96,7 @@ Shared hook entrypoint: `test/scripts/benchmark_access_hook.py`
 | `benchmark_manager` | benchmark orchestration only; no MCP |
 | `baseline` | no project-folder reads; worker prompt inputs under `test/<iteration>/<skill>/eval-*/input/` + narrow LikeC4 grounding only; writes under `test/<iteration>/<skill>/` |
 | `baseline_hook_only` | same read scope as baseline, but skills remain present; probe only; writes under `test/<iteration>/<skill>/` |
-| `with_skill_targeted` | locked target skill only; prompts from `evals/evals-public.json` only; writes under `test/<iteration>/<skill>/` |
+| `with_skill_targeted` | locked target skill only; prompts from `test/<iteration>/<skill>/eval-*/input/prompt.md|prompt.json` or `evals/evals-public.json`; writes under `test/<iteration>/<skill>/` |
 | `blind_compare` | blinded `A.md` / `B.md` + target `grading-spec.json`; no MCP |
 
 Narrow LikeC4 grounding is allowed only for scored answer-generation workers. Project listing, project summaries, and view browsing remain denied.
@@ -108,7 +116,9 @@ The manager instructs each worker with the exact output file path (e.g. `test/<i
 
 For strict baseline and hook-only baseline runs, prefer worker-local prompt inputs over `_meta` snapshots: read prompts from `test/<iteration>/<skill>/eval-<id>/input/prompt.md` (or `prompt.json`). `_meta` prompt snapshots remain a manager artifact.
 
-When calling `write-run-metrics` after workers complete, write to the **per-run path** `test/<iteration>/<skill>/_runs/<config>/run-<N>-metrics.json` (not directly to `<skill>/<config>-run-metrics.json`). `summarize-phase` automatically detects per-run files under `_runs/<config>/`, calls `refresh_run_metrics_collection` to consolidate them into the canonical `<config>-run-metrics.json` (with a `runs[]` array), then builds the summary. Writing directly to the consolidated path bypasses this and produces a flat object that fails `pre-aggregate-check`.
+For `with_skill` runs, you can also use these iteration-local prompt inputs. This avoids hook denials when a worker flow uses prompt files produced by `snapshot-public-evals` instead of reopening skill files.
+
+When calling `write-run-metrics` (manual timestamps) or `write-run-metrics-auto` (derive timing from `response.md` mtimes) after workers complete, write to the **per-run path** `test/<iteration>/<skill>/_runs/<config>/run-<N>-metrics.json` (not directly to `<skill>/<config>-run-metrics.json`). `summarize-phase` automatically detects per-run files under `_runs/<config>/`, calls `refresh_run_metrics_collection` to consolidate them into the canonical `<config>-run-metrics.json` (with a `runs[]` array), then builds the summary. Writing directly to the consolidated path bypasses this and produces a flat object that fails `pre-aggregate-check`.
 
 Blind comparator workers remain read-mostly, but may additionally journal one wrapped raw payload per task under the exact `raw_output_path` returned by `blind-compare-bundle` (for example `test/<iteration>/_meta/raw-comparison-<skill>-eval-<id>-run-<n>.json`). That keeps large comparator reasoning out of chat transport while preserving an auditable per-task journal.
 
@@ -116,7 +126,7 @@ Blind comparator workers remain read-mostly, but may additionally journal one wr
 
 Workers must write **one JSON object per file**, not append. If a worker batch-processes multiple evals in one session and writes metrics sequentially, always use `create_file` (or an atomic overwrite with `replace_string_in_file`) per metrics file — never open-and-append. Multiple JSON objects in the same `eval-N-metrics.json` file cause `"Extra data"` JSON parse errors that break `summarize-phase`.
 
-Recovery path when per-eval metrics are corrupted: use `write-run-metrics --config <config> --run-number <N> ...` to overwrite each corrupted file individually via the manager CLI (the manager is the only role allowed to repair metrics files across configurations). Do NOT use worker subagents to repair `_runs/without_skill/` files from a `with_skill_targeted` session — the hook scope mismatch will cause denial errors.
+Recovery path when per-eval metrics are corrupted: use `write-run-metrics --config <config> --run-number <N> ...` (explicit values) or `write-run-metrics-auto --iteration <...> --skill <...> --config <...> --run-number <N>` (filesystem-derived timing) to overwrite each corrupted file individually via the manager CLI (the manager is the only role allowed to repair metrics files across configurations). Do NOT use worker subagents to repair `_runs/without_skill/` files from a `with_skill_targeted` session — the hook scope mismatch will cause denial errors.
 
 ## Trace levels
 

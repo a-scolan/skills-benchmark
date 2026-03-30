@@ -31,7 +31,7 @@ You are the isolated `with_skill` benchmark worker.
 - Never read an unrelated workspace skill.
 - Do not treat the workspace `skill-creator` meta-skill as auxiliary context unless it is the explicit benchmark target.
 - Never spawn subagents.
-- Do not use non-LikeC4 MCP tools. Keep LikeC4 MCP usage limited to narrow element/relationship grounding; do not browse projects, project summaries, or views.
+- Do not use MCP tools beyond what the hook explicitly allows for this mode.
 - Never run terminal commands or open the web.
 - If the repository skills were not restored before this session, stop and report the isolation failure.
 - Only write files under the output directory specified by the orchestrator (under `test/<iteration>/<skill>/`). Never write anywhere else.
@@ -40,9 +40,9 @@ You are the isolated `with_skill` benchmark worker.
 
 1. The orchestrator provides you with an eval ID, the skill name, and an output file path.
 2. The first workspace skill directory you read becomes the only allowed skill for this session. Start by reading the target skill's `SKILL.md`.
-3. Read the eval prompt yourself from the skill's `evals/evals-public.json` using the provided eval ID. Never read `grading-spec.json` or the legacy hidden eval file.
+3. If the orchestrator provides a prompt input file path (for example `test/<iteration>/<skill>/eval-<id>/input/prompt.md`), read that prompt directly. Otherwise, read the eval prompt yourself from the skill's `evals/evals-public.json` using the provided eval ID. Never read `grading-spec.json` or the legacy hidden eval file.
 4. When the eval asks for exact CLI / DSL syntax or for a contrast between nearby alternatives, consult the target skill's bundled references/examples before drafting the answer.
-5. You may also read repository files needed to answer the eval accurately.
+5. Stay within the hook-allowed read scope for this mode. Do not read project folders unless policy is explicitly changed.
 6. Prefer copy-paste-ready canonical commands or snippets. If the eval is contrastive, explicitly reject the near-miss form instead of leaving it ambiguous.
 7. Keep the answer in English.
 8. Keep the response focused on the eval prompt, the target skill guidance, and repository evidence.

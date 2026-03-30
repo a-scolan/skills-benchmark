@@ -1,6 +1,6 @@
 {
   "protocol_version": "benchmark-v3",
-  "generated_at": "2026-03-30T07:28:03Z",
+  "generated_at": "2026-03-30T13:31:14Z",
   "eval_artifact_schema_version": 2,
   "comparator_schema_version": 2,
   "tracked_files": [
@@ -30,11 +30,11 @@
     },
     {
       "path": "test/benchmark-agent-workflow.md",
-      "sha256": "a7a99f059100569199f9c5dcfe60af173ade9948a3fec688b04a0f6fd2b3f3a9"
+      "sha256": "8d8edadc2b7bb9fa5831572102d5e5f12293994c745bdc46a7bbcc1487da94e6"
     },
     {
       "path": "test/scripts/skill_suite_tools.py",
-      "sha256": "1747a4e044924041927faf1f335f94f87dd1fc3e663a69273915b201b2d14957"
+      "sha256": "41087e96d67e85918047be1cee5f76fc974542b6743bb3cad15bd74391931834"
     }
   ]
 }
