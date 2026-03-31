@@ -2,6 +2,8 @@
 
 This guide shows how to set up the repository in a reproducible way and run a first benchmark iteration.
 
+For trust rules and phase invariants, use `test/benchmark-agent-workflow.md` as the source of truth. This page stays task-oriented and non-redundant.
+
 ## Who this guide is for
 
 Use this if you are reusing this repository in a new workspace and want a reliable first run.
@@ -57,6 +59,30 @@ Expected outputs:
 - `test/benchmark-run-001/suite-summary.md`
 - Per-skill directories under `test/benchmark-run-001/<skill>/`
 
+## New operational capabilities (`benchmark-v3`)
+
+- `resume-finalize` now supports interruption-safe recovery by auto-materialising missing blind payloads from `test/<iteration>/_meta/`.
+- `protocol-preflight` performs mandatory hook-state hygiene for worker modes before execution.
+- `snapshot-public-evals` creates iteration-local prompt inputs under `test/<iteration>/<skill>/eval-<id>/input/`.
+- Blind comparison materialisation supports stdin or file payloads with compatibility `--workspace-root` flags.
+- Run metrics can be derived automatically from response artifacts with `write-run-metrics-auto`.
+
+These commands improve repeatability without changing the benchmark output contract.
+
+## Recommended CLI lifecycle for one iteration
+
+1. Initialise protocol lock and safeguards:
+   - `python test/scripts/skill_suite_tools.py write-protocol-manifest --iteration test/benchmark-run-001 --workspace-root .`
+   - `python test/scripts/skill_suite_tools.py protocol-preflight --iteration test/benchmark-run-001 --workspace-root .`
+2. Snapshot public prompts for worker-local reads:
+   - `python test/scripts/skill_suite_tools.py snapshot-public-evals --iteration test/benchmark-run-001 --workspace-root .`
+3. Run your worker phases (manager-driven or manual orchestration).
+4. Validate and finalise:
+   - `python test/scripts/skill_suite_tools.py pre-aggregate-check --iteration test/benchmark-run-001 --workspace-root .`
+   - `python test/scripts/skill_suite_tools.py resume-finalize --iteration test/benchmark-run-001 --workspace-root .`
+
+If execution is interrupted, rerun `resume-finalize` directly.
+
 ## Minimal first run (Manager agent)
 
 1. Open Copilot Chat in VS Code.
@@ -72,6 +98,14 @@ Before rerunning a previously used iteration:
   - `python test/scripts/skill_suite_tools.py reset-blind-comparisons --iteration test/benchmark-run-001 --workspace-root . --skill <skill-name>`
 - Re-run preflight:
   - `python test/scripts/skill_suite_tools.py protocol-preflight --iteration test/benchmark-run-001 --workspace-root .`
+
+Optional before reruns:
+
+- Remove disposable generated exports only:
+   - `python test/scripts/skill_suite_tools.py prune-generated-artifacts --iteration test/benchmark-run-001 --workspace-root .`
+- Check metrics shape and aliases:
+   - `python test/scripts/skill_suite_tools.py validate-metrics --iteration test/benchmark-run-001 --workspace-root .`
+   - `python test/scripts/skill_suite_tools.py normalize-metrics --iteration test/benchmark-run-001 --workspace-root .`
 
 ## Validation checklist before publishing results
 

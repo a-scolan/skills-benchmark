@@ -20,6 +20,10 @@ Use this page to diagnose common failures when reusing the benchmark harness.
 3. Re-run:
    - `python test/scripts/skill_suite_tools.py pre-aggregate-check --iteration <iteration> --workspace-root .`
 
+Quick recovery path:
+
+- `python test/scripts/skill_suite_tools.py resume-finalize --iteration <iteration> --workspace-root .`
+
 ---
 
 ## 2) Hook denies reads in baseline mode
@@ -92,6 +96,54 @@ Use this page to diagnose common failures when reusing the benchmark harness.
 2. Pass `raw_output_path` to comparator.
 3. Have comparator write wrapped payload to that path.
 4. Materialise immediately after comparator acknowledgement.
+
+If you already have a payload file, materialise directly:
+
+- `python test/scripts/skill_suite_tools.py materialize-comparisons --iteration <iteration> --skill <skill> --raw-json <path>`
+
+If payload is in stdin:
+
+- `python test/scripts/skill_suite_tools.py materialize-comparisons-stdin --iteration <iteration> --skill <skill>`
+
+Both commands accept an optional compatibility `--workspace-root` flag.
+
+---
+
+## 8) Blind artifacts not found after moving to run-scoped layout
+
+### Symptom
+
+- Tooling or manual checks expect `blind/A.md` and `blind/B.md`, but files are missing.
+
+### Cause
+
+- Blind artifacts are now run-scoped: `blind/run-<N>/A.md` and `blind/run-<N>/B.md`.
+
+### Fix
+
+1. Build bundle for the exact run:
+   - `python test/scripts/skill_suite_tools.py blind-compare-bundle --iteration <iteration> --workspace-root . --skill <skill> --eval-id <eval-id> --run-number <N>`
+2. Use returned A/B paths and grading spec path exactly as provided.
+
+---
+
+## 9) Baseline/with-skill worker cannot read prompt source files
+
+### Symptom
+
+- Worker gets denied when reading broad project prompt files during scored runs.
+
+### Cause
+
+- Workers are expected to read iteration-local prompt snapshots instead of project-wide sources.
+
+### Fix
+
+1. Run:
+   - `python test/scripts/skill_suite_tools.py snapshot-public-evals --iteration <iteration> --workspace-root .`
+2. Read prompts from:
+   - `test/<iteration>/<skill>/eval-<id>/input/prompt.md`
+   - `test/<iteration>/<skill>/eval-<id>/input/prompt.json`
 
 ---
 

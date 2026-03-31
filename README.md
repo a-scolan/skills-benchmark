@@ -12,9 +12,22 @@ This repository implements a deterministic benchmarking harness designed to test
 - **Comprehensive grading**: Results include quantitative metrics, per-eval comparisons, and anthropic best-practices synthesis
 - **Generic framework**: Reusable for benchmarking skills in any domain
 
+## What’s New in `benchmark-v3`
+
+Recent upgrades focus on run safety, recoverability, and cleaner evidence handling:
+
+- **Preflight session hygiene**: `protocol-preflight` now resets worker hook state for stateful modes before each iteration.
+- **Idempotent skill relocation**: repeated `disable-workspace-skills` calls reuse the existing relocation manifest safely.
+- **Iteration-local prompt snapshots**: `snapshot-public-evals` writes prompt inputs into each eval’s `input/` directory so workers can read local prompt artifacts directly.
+- **Run-scoped blind artifacts**: blind files now live under `blind/run-<N>/` with per-run mapping files.
+- **Comparator journalling**: blind tasks include `raw_output_path` so large comparator payloads are persisted under `test/<iteration>/_meta/` instead of relying on chat transport.
+- **Resume-safe finalisation**: `resume-finalize` auto-materialises missing blind payloads from `_meta`, runs pre-checks, then aggregates.
+- **Canonical operational noise log**: `_meta/harness-noise.json` captures non-fatal denied probes and duplicate raw journals for synthesis context.
+- **Per-run metrics pipeline**: metrics are written per run under `_runs/<config>/run-<N>-metrics.json` and consolidated during summarisation.
+
 ## How It Works
 
-### Two-Phase Comparison Strategy
+### Three-Phase Comparison Strategy
 
 The benchmark workflow isolates skill behavior through two sequential phases:
 
@@ -146,6 +159,18 @@ python test/scripts/skill_suite_tools.py prune-generated-artifacts \
 ```
 
 For a fully guided first run (including protocol and preflight steps), see [`docs/SETUP.md`](docs/SETUP.md).
+
+### Recovery & Validation Commands (CLI)
+
+For interruption recovery and stricter validation workflows, use:
+
+- `resume-finalize` — recover missing blind materialisations and aggregate safely.
+- `pre-aggregate-check` — fail-fast readiness validation before aggregation.
+- `validate-metrics` and `normalize-metrics` — enforce canonical run-metrics schema.
+- `validate-blind-isolation` — verify blind artifact isolation constraints.
+- `validate-executable-checks` — run executable response checks.
+
+The step-by-step command flow is documented in [`docs/SETUP.md`](docs/SETUP.md); full invariants remain in [`test/benchmark-agent-workflow.md`](test/benchmark-agent-workflow.md).
 
 ### Understanding Outputs
 
@@ -374,6 +399,7 @@ python test/scripts/tests/test_skill_suite_tools.py
 - [Benchmark Protocol](test/benchmark-protocol.json) – current protocol version and artifact schemas
 - [Setup and Reuse Guide](docs/SETUP.md) – reproducible environment setup and first benchmark run
 - [Troubleshooting Guide](docs/TROUBLESHOOTING.md) – common failures and targeted fixes
+- [CLI command help](test/scripts/skill_suite_tools.py) – operational command surface and compatibility flags
 - `.github/agents/*.agent.md` – individual agent operating rules and constraints
 
 ## Contributing
