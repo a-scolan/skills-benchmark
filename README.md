@@ -16,64 +16,98 @@ This repository implements a deterministic benchmarking harness designed to test
 
 ### Workflow at a Glance
 
-The benchmark is intentionally **sequential across phases** and **parallel inside each phase**. In practice, the harness prepares the iteration, runs a strict baseline, restores skills for the enhanced pass, performs blind A/B judging, then finalizes summaries and synthesis.
+The benchmark is intentionally **sequential across phases** and **parallel inside each phase**, but each phase also expands into a **full test matrix** rather than a single pass. In practice, every iteration replays the same `{skill × eval × config × run}` space for both baseline and `with_skill`, then compares matching eval/run pairs blindly before deciding whether to run another iteration.
 
 ```mermaid
 flowchart TB
   classDef prep fill:#E8F1FF,stroke:#2F6FEB,stroke-width:1.5px,color:#0B1F33;
+  classDef matrix fill:#EAF7FF,stroke:#1F6FEB,stroke-width:1.5px,color:#08294D;
   classDef phase fill:#EEF8EE,stroke:#2DA44E,stroke-width:1.5px,color:#132A13;
   classDef blind fill:#FFF4E5,stroke:#BF8700,stroke-width:1.5px,color:#5C3B00;
   classDef final fill:#F5E8FF,stroke:#8250DF,stroke-width:1.5px,color:#2E1065;
+  classDef decision fill:#FFE5EC,stroke:#CF225B,stroke-width:1.5px,color:#4A1022;
   classDef note fill:#FFF8C5,stroke:#9A6700,stroke-dasharray: 4 3,color:#3D2E00;
 
   Start(["Start benchmark iteration"])
-  Clean["Clean benchmark artifacts"]
-  Protocol["Write protocol manifest"]
-  Preflight["Run protocol preflight<br/>(reset hook state)"]
+  Prep["Clean artifacts<br/>write protocol manifest<br/>run protocol-preflight"]
+  Matrix["Expand benchmark matrix<br/>skills × evals × configs × runs"]
 
   subgraph Phase1["Phase 1 — without_skill baseline"]
-    Disable["Relocate .github/skills/<br/>→ test/&lt;iteration&gt;/_disabled-skills/"]
-    Baseline["Run baseline workers in parallel waves<br/>&lt;skill, eval, config, run&gt;"]
-    Metrics1["Write, normalize &amp; validate<br/>without_skill metrics"]
+    direction TB
+    Disable["Relocate .github/skills/<br/>to _disabled-skills/"]
+    BaselineWave["Launch baseline workers<br/>in parallel waves"]
+    BaselineUnit["Repeat for every work unit<br/>skill × eval × config × run"]
+    BaselineRuns["run-1, run-2, …, run-N<br/>for each eval/config pair"]
+    Metrics1["Normalize & validate<br/>without_skill metrics"]
+    Disable --> BaselineWave --> BaselineUnit --> BaselineRuns --> Metrics1
   end
 
   subgraph Phase2["Phase 2 — with_skill"]
+    direction TB
     Restore["Restore .github/skills/"]
-    WithSkill["Run with_skill workers in parallel waves"]
-    Metrics2["Write, normalize &amp; validate<br/>with_skill metrics"]
+    WithSkillWave["Launch with_skill workers<br/>in parallel waves"]
+    WithSkillUnit["Replay the same matrix<br/>skill × eval × config × run"]
+    WithSkillRuns["run-1, run-2, …, run-N<br/>again with skill access"]
+    Metrics2["Normalize & validate<br/>with_skill metrics"]
+    Restore --> WithSkillWave --> WithSkillUnit --> WithSkillRuns --> Metrics2
   end
 
   subgraph Phase3["Phase 3 — blind comparison"]
+    direction TB
     ResetBlind["Reset blind comparisons"]
-    BlindPrep["Prepare blinded A/B bundles<br/>per eval + run"]
-    Compare["Run blind comparator workers<br/>in parallel waves"]
-    ExecChecks["Validate executable checks"]
+    BlindPrep["Prepare blinded A/B bundles<br/>for each eval + run pair"]
+    CompareWave["Launch comparator workers<br/>in parallel waves"]
+    BlindPairs["Compare A vs B for<br/>eval-1/run-1 … eval-M/run-N"]
+    BlindAgg["Aggregate winners, confidence<br/>and variance across runs"]
+    ResetBlind --> BlindPrep --> CompareWave --> BlindPairs --> BlindAgg
   end
 
-  subgraph Finalize["Finalize & synthesize"]
+  subgraph Finalize["Finalize iteration"]
+    direction TB
     Resume["Resume-finalize / aggregate"]
-    Summary["Refresh suite summaries<br/>and blind-comparisons"]
-    Synthesis["Generate per-skill synthesis.md"]
+    Summary["Refresh suite summaries,<br/>blind-comparisons and reports"]
+    Synthesis["Write per-skill synthesis.md<br/>with the next edits to try"]
+    Resume --> Summary --> Synthesis
   end
 
-  Note["Parallelism is allowed inside each phase only;<br/>phase boundaries stay strictly sequential"]
+  Stable{"Results stable enough<br/>or new changes worth testing?"}
+  Improve["Refine skill, prompts<br/>or eval design"]
+  Next(["Iteration N+1 repeats<br/>the full matrix"])
+  End(["Keep / publish results"])
 
-  Start --> Clean --> Protocol --> Preflight --> Disable --> Baseline --> Metrics1 --> Restore --> WithSkill --> Metrics2 --> ResetBlind --> BlindPrep --> Compare --> ExecChecks --> Resume --> Summary --> Synthesis
-  Baseline -.-> Note
-  WithSkill -.-> Note
-  Compare -.-> Note
+  NoteParallel["Parallelism is allowed inside each phase only;<br/>phase boundaries stay strictly sequential"]
+  NoteVariance["Variance is estimated from repeated runs,<br/>not from a single best attempt"]
+  NoteBlind["Blind judging stays aligned by eval + run,<br/>so A/B comparisons remain apples-to-apples"]
 
-  class Start,Clean,Protocol,Preflight prep;
-  class Disable,Baseline,Metrics1,Restore,WithSkill,Metrics2 phase;
-  class ResetBlind,BlindPrep,Compare,ExecChecks blind;
-  class Resume,Summary,Synthesis final;
-  class Note note;
+  Start --> Prep --> Matrix --> Disable
+  Metrics1 --> Restore
+  Metrics2 --> ResetBlind
+  BlindAgg --> Resume
+  Synthesis --> Stable
+  Stable -- "Iterate" --> Improve --> Next --> Prep
+  Stable -- "Stop" --> End
+
+  BaselineWave -.-> NoteParallel
+  WithSkillWave -.-> NoteParallel
+  CompareWave -.-> NoteParallel
+  BaselineRuns -.-> NoteVariance
+  WithSkillRuns -.-> NoteVariance
+  BlindPairs -.-> NoteBlind
+
+  class Start,Prep prep;
+  class Matrix,BaselineUnit,WithSkillUnit matrix;
+  class Disable,BaselineWave,BaselineRuns,Metrics1,Restore,WithSkillWave,WithSkillRuns,Metrics2 phase;
+  class ResetBlind,BlindPrep,CompareWave,BlindPairs,BlindAgg blind;
+  class Resume,Summary,Synthesis,Improve,Next,End final;
+  class Stable decision;
+  class NoteParallel,NoteVariance,NoteBlind note;
 ```
 
-- **Preparation is mandatory**: each run starts by cleaning artifacts, writing the protocol manifest, and resetting hook state with `protocol-preflight`.
-- **Baseline integrity comes first**: the default `without_skill` path physically relocates `.github/skills/` before any baseline worker runs.
-- **Parallelism is deliberate, not global**: workers run in parallel for each `<skill, eval_id, configuration, run_number>` unit, but phases never overlap.
-- **Finalization is part of the workflow**: `resume-finalize` (or `aggregate`) refreshes blind outputs, summaries, and the per-skill synthesis report.
+- **Each benchmark iteration is a matrix, not a single run**: the harness expands work across every `skill`, `eval_id`, `configuration`, and repeated `run_number`.
+- **Repeated runs are part of the measurement model**: `run-1 … run-N` are replayed for both baseline and `with_skill`, then rolled up into variance-aware summaries.
+- **Blind comparison stays pairwise and fair**: every comparator run matches the same `eval_id` and `run_number` on both sides, rather than comparing aggregate blobs.
+- **Baseline integrity still comes first**: the default `without_skill` path physically relocates `.github/skills/` before any baseline worker runs.
+- **The workflow is iterative by design**: `synthesis.md` is the hand-off into the next round of skill edits, and iteration `N+1` reruns the full matrix to confirm whether the changes really helped.
 
 ### Three-Phase Comparison Strategy
 
