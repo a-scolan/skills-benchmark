@@ -12,20 +12,68 @@ This repository implements a deterministic benchmarking harness designed to test
 - **Comprehensive grading**: Results include quantitative metrics, per-eval comparisons, and anthropic best-practices synthesis
 - **Generic framework**: Reusable for benchmarking skills in any domain
 
-## What’s New in `benchmark-v3`
-
-Recent upgrades focus on run safety, recoverability, and cleaner evidence handling:
-
-- **Preflight session hygiene**: `protocol-preflight` now resets worker hook state for stateful modes before each iteration.
-- **Idempotent skill relocation**: repeated `disable-workspace-skills` calls reuse the existing relocation manifest safely.
-- **Iteration-local prompt snapshots**: `snapshot-public-evals` writes prompt inputs into each eval’s `input/` directory so workers can read local prompt artifacts directly.
-- **Run-scoped blind artifacts**: blind files now live under `blind/run-<N>/` with per-run mapping files.
-- **Comparator journalling**: blind tasks include `raw_output_path` so large comparator payloads are persisted under `test/<iteration>/_meta/` instead of relying on chat transport.
-- **Resume-safe finalisation**: `resume-finalize` auto-materialises missing blind payloads from `_meta`, runs pre-checks, then aggregates.
-- **Canonical operational noise log**: `_meta/harness-noise.json` captures non-fatal denied probes and duplicate raw journals for synthesis context.
-- **Per-run metrics pipeline**: metrics are written per run under `_runs/<config>/run-<N>-metrics.json` and consolidated during summarisation.
-
 ## How It Works
+
+### Workflow at a Glance
+
+The benchmark is intentionally **sequential across phases** and **parallel inside each phase**. In practice, the harness prepares the iteration, runs a strict baseline, restores skills for the enhanced pass, performs blind A/B judging, then finalizes summaries and synthesis.
+
+```mermaid
+flowchart TB
+  classDef prep fill:#E8F1FF,stroke:#2F6FEB,stroke-width:1.5px,color:#0B1F33;
+  classDef phase fill:#EEF8EE,stroke:#2DA44E,stroke-width:1.5px,color:#132A13;
+  classDef blind fill:#FFF4E5,stroke:#BF8700,stroke-width:1.5px,color:#5C3B00;
+  classDef final fill:#F5E8FF,stroke:#8250DF,stroke-width:1.5px,color:#2E1065;
+  classDef note fill:#FFF8C5,stroke:#9A6700,stroke-dasharray: 4 3,color:#3D2E00;
+
+  Start(["Start benchmark iteration"])
+  Clean["Clean benchmark artifacts"]
+  Protocol["Write protocol manifest"]
+  Preflight["Run protocol preflight<br/>(reset hook state)"]
+
+  subgraph Phase1["Phase 1 — without_skill baseline"]
+    Disable["Relocate .github/skills/<br/>→ test/&lt;iteration&gt;/_disabled-skills/"]
+    Baseline["Run baseline workers in parallel waves<br/>&lt;skill, eval, config, run&gt;"]
+    Metrics1["Write, normalize &amp; validate<br/>without_skill metrics"]
+  end
+
+  subgraph Phase2["Phase 2 — with_skill"]
+    Restore["Restore .github/skills/"]
+    WithSkill["Run with_skill workers in parallel waves"]
+    Metrics2["Write, normalize &amp; validate<br/>with_skill metrics"]
+  end
+
+  subgraph Phase3["Phase 3 — blind comparison"]
+    ResetBlind["Reset blind comparisons"]
+    BlindPrep["Prepare blinded A/B bundles<br/>per eval + run"]
+    Compare["Run blind comparator workers<br/>in parallel waves"]
+    ExecChecks["Validate executable checks"]
+  end
+
+  subgraph Finalize["Finalize & synthesize"]
+    Resume["Resume-finalize / aggregate"]
+    Summary["Refresh suite summaries<br/>and blind-comparisons"]
+    Synthesis["Generate per-skill synthesis.md"]
+  end
+
+  Note["Parallelism is allowed inside each phase only;<br/>phase boundaries stay strictly sequential"]
+
+  Start --> Clean --> Protocol --> Preflight --> Disable --> Baseline --> Metrics1 --> Restore --> WithSkill --> Metrics2 --> ResetBlind --> BlindPrep --> Compare --> ExecChecks --> Resume --> Summary --> Synthesis
+  Baseline -.-> Note
+  WithSkill -.-> Note
+  Compare -.-> Note
+
+  class Start,Clean,Protocol,Preflight prep;
+  class Disable,Baseline,Metrics1,Restore,WithSkill,Metrics2 phase;
+  class ResetBlind,BlindPrep,Compare,ExecChecks blind;
+  class Resume,Summary,Synthesis final;
+  class Note note;
+```
+
+- **Preparation is mandatory**: each run starts by cleaning artifacts, writing the protocol manifest, and resetting hook state with `protocol-preflight`.
+- **Baseline integrity comes first**: the default `without_skill` path physically relocates `.github/skills/` before any baseline worker runs.
+- **Parallelism is deliberate, not global**: workers run in parallel for each `<skill, eval_id, configuration, run_number>` unit, but phases never overlap.
+- **Finalization is part of the workflow**: `resume-finalize` (or `aggregate`) refreshes blind outputs, summaries, and the per-skill synthesis report.
 
 ### Three-Phase Comparison Strategy
 
@@ -385,6 +433,7 @@ rm -rf __pycache__ .github/agents/scripts/__pycache__
 
 ```bash
 git clean -fdx test/
+
 ```
 
 ### Run tests:
